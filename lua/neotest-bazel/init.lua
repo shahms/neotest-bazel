@@ -196,7 +196,6 @@ return function(user_config)
           return nil
         end
 
-        LOG.error("Found locations:", locations)
         local positions = {
           {
             type = "file",
@@ -215,10 +214,7 @@ return function(user_config)
           -- and extend the end location to the final line of the function call. bazel query location is the open parenthesis.
           -- TODO(shahms): Use the rule kind to discover positions for the dependent files and include that information as well.
           local loc, _, _, name = unpack(vim.split(line, " "))
-          local build_path, row, col = unpack(vim.split(loc, ":"))
-          if build_path ~= file_path then
-            LOG.error("Huh?", build_path, "~=", file_path)
-          end
+          local _, row, col = unpack(vim.split(loc, ":"))
           -- TODO(shahms): Support non-BUILD files.
           table.insert(positions, {
             type = "test",
@@ -240,17 +236,15 @@ return function(user_config)
     end,
     build_spec = function(args)
       local position = args.tree:data()
-      LOG.error("Building spec for: ", position)
       local workspace, package, _ = split_valid_bazel_file(position.path)
       if not (workspace and package) then
         return nil
       end
-      LOG.error("root:", args.tree:root().path, "workspace:", workspace)
       local query
       if position.type == types.PositionType.file then
         query = ("//%s:all"):format(package)
       else
-        LOG.error("Unhandled position:", position)
+        LOG.info("Unhandled position:", position)
         -- TODO(shahms): handle "dir" "namespace" "test"
         return nil
       end
@@ -278,7 +272,6 @@ return function(user_config)
       }
     end,
     results = function(run_spec, result, tree)
-      LOG.error("Got result:", run_spec, result, tree:data().id, tree)
       local results = {}
       for _, line in ipairs(lib.files.read_lines(run_spec.context.bes_path)) do
         local label, status, logs = parse_test_result(line)
@@ -290,7 +283,6 @@ return function(user_config)
             -- but the actual test output is logs.log.
             output = result.output,
           }
-          LOG.error("Found result:", label, status, logs)
         end
       end
       return results
