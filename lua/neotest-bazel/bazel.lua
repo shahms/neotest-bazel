@@ -4,10 +4,19 @@ local LOG = require("neotest.logging")
 
 local M = { queries = {} }
 
+--- Bazel-reported errors which are expected.
 local harmless_errors = {
+  --- "some(..., N)" fails with this message if the argument is the empty set.
+  --- As we are using this query to see if there are any targets, this is expected.
   "failed: argument set is empty\n$",
+  --- Similarly, queries of directories which are not packages will report this error.
   "^ERROR: no targets found beneath",
 }
+
+--- Return true if any of the patterns match.
+--- @param str string The string against which to match.
+--- @param patterns string[] The patterns to check.
+--- @return boolean true if any pattern matches.
 local function match_any(str, patterns)
   for _, pat in ipairs(patterns) do
     if str:match(pat) then
@@ -56,10 +65,12 @@ function M.queries.file(rel_path)
   ]]):format(rel_path)
 end
 
+--- Query for test targets from the subquery.
 function M.queries.tests(query)
   return ("tests(%s)"):format(query)
 end
 
+--- Query which checks if there are any targets in the subquery.
 function M.queries.exists(query)
   return ("some(%s, 1)"):format(query)
 end
@@ -74,6 +85,8 @@ function M.queries.all_test_files()
   ]]
 end
 
+--- Composes queries by applying named functions from the "queries" table.
+--- compose_query("a", "b", "c") is the same as queries.a(queryies.b(c)).
 function M.compose_query(...)
   local arg = { ... }
   local query
