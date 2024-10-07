@@ -1,47 +1,28 @@
-# nvim-lua-plugin-template
+# Neotest Bazel
 
-This repository is a template for Neovim plugins written in Lua.
+A [neotest](https://github.com/nvim-eotest/neotest) adapter for [Bazel](https://bazel.build/), which aims to be flexible enough for use in large Bazel monorepos.
 
-The intention is that you use this template to create a new repository where you then adapt this readme and add your plugin code.
-The template includes the following:
+![image](https://github.com/user-attachments/assets/e9d8fcec-4880-4ede-9280-d9402298a570)
 
-- GitHub workflows and configurations to run linters and tests
-- Packaging of tagged releases and upload to [LuaRocks][luarocks]
-  if a [`LUAROCKS_API_KEY`][luarocks-api-key] is added
-  to the [GitHub Actions secrets][gh-actions-secrets]
-- Minimal test setup:
-  - A `scm` [rockspec][rockspec-format], `nvim-lua-plugin-scm-1.rockspec`
-  - A `.busted` file
-- EditorConfig
-- A .luacheckrc
+## Table of Contents
 
+- [FAQs](#faqs)
+- [Current Known Issues](#current-known-issues)
+- [Development](#development)
+- [Acknowledgements](#acknowledgements)
 
-To get started writing a Lua plugin, I recommend reading `:help lua-guide` and
-`:help write-plugin`.
+## FAQs
 
-## Scope
+> How does this differ from [sluongng/neotest-bazel](https://github.com/sluongng/neotest-bazel)?
 
-Anything that the majority of plugin authors will want to have is in scope of
-this starter template. Anything that is controversial is out-of-scope.
+My primary goal is to make this plugin usable in large monorepos, which may otherwise struggle with neotest's discovery while still being flexible enough to enable eager discovery in smaller projects.
+In terms of current functionality, [sluongng/neotest-bazel](https://github.com/sluongng/neotest-bazel) will currently run tests from within the language test file (if that language is supported),
+while this project will only run tests from the `BUILD` file which defines the corresponding target.
 
-## Usage
+## Current Known Issues
 
-- Click [Use this template][use-this-template]. Do not fork.
-- Rename `nvim-lua-plugin-scm-1.rockspec` and change the `package` name
-  to the name of your plugin.
-
-## Template License
-
-The template itself is licensed under the [MIT license](https://en.wikipedia.org/wiki/MIT_License).
-The template doesn't include a LICENSE file. You should add one after creating your repository.
-
----
-
-
-The remainder of the README is text that can be preserved in your plugin:
-
----
-
+* Tests cannot be run from the language test file, only the BUILD file which defines the target.
+* Within `BUILD` files, test target location is limited to the row and column of the opening parenthesis (as reported by `bazel query`) rather than encompassing the entire location.
 
 ## Development
 
@@ -87,3 +68,7 @@ eval $(luarocks path --no-bin)
 [busted]: https://lunarmodules.github.io/busted/
 [nlua]: https://github.com/mfussenegger/nlua
 [use-this-template]: https://github.com/new?template_name=nvim-lua-plugin-template&template_owner=nvim-lua
+
+## Acknowledgements
+
+- Insipriation taken from: [sluongng/neotest-bazel](https://github.com/sluongng/neotest-bazel).
