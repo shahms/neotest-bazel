@@ -60,7 +60,7 @@ function M.queries.file(rel_path)
   return ([[
   let files = set("%s") in
   let rdeps = same_pkg_direct_rdeps($files) in
-  let build = kind(rule, siblings(buildfiles($files) intersect $files)) in
+  let build = kind("rule$", siblings(buildfiles($files) intersect $files)) in
   $rdeps union $build
   ]]):format(rel_path)
 end
@@ -117,10 +117,10 @@ function M.root(dir)
   if not bazel then
     error(err)
   end
-  local result = bazel.result()
+  local result = bazel.result(false)
   local stdout = bazel.stdout.read()
   bazel.close()
-  if result ~= 0 then
+  if result ~= 0 or not stdout then
     return nil
   end
   return vim.trim(stdout)
@@ -141,9 +141,7 @@ function M.run_query(workspace, query, opts)
     "--keep_going",
     "--order_output=no",
   }
-  if opts.output then
-    table.insert(args, "--output=" .. opts.output)
-  end
+  vim.list_extend(args, opts)
   table.insert(args, query)
   local bazel, err = nio.process.run({
     cmd = "bazel",
@@ -153,12 +151,12 @@ function M.run_query(workspace, query, opts)
   if not bazel then
     error(err)
   end
-  local result = bazel.result()
+  local result = bazel.result(false)
   local stdout, stderr = bazel.stdout.read(), bazel.stderr.read()
   bazel.close()
-  if not vim.list_contains({ 0, 3 }, result) then
+  if not (vim.list_contains({ 0, 3 }, result) and stdout) then
     -- some() will harmlessly fail if there are no targets.
-    if not match_any(stderr, harmless_errors) then
+    if stderr and not match_any(stderr, harmless_errors) then
       LOG.warn("Error (", result, ") querying bazel:", stderr)
     end
     return nil

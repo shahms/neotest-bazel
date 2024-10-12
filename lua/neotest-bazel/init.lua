@@ -12,7 +12,7 @@ local default_config = {
     enabled = false,
   },
   rules = {
-    py = {
+    java_test = {
     }
   }
 }
@@ -71,6 +71,71 @@ local function parse_test_result(line)
     TOOL_HALTED_BEFORE_TESTING = types.ResultStatus.skipped,
   }
   return label, status_map[result.status] or types.ResultStatus.skipped, logs
+end
+
+local function find_file_test_locations(file_path)
+  local parent = file_path:parent().filename
+  local query = bazel.compose_query("tests", "file", make_relative(file_path.filename, parent))
+  local results = bazel.run_query(parent, query,
+    { "--output=streamed_jsonproto", "--noproto:rule_inputs_and_outputs", "--proto:output_rule_attrs=" })
+  if not results then
+    return nil
+  end
+  return vim.iter(ipairs(results)):map(function(_, line)
+    local entry = vim.json.decode(line)
+    local rule = entry and entry.type == "RULE" and entry.rule
+    if not rule then
+      return nil
+    end
+    local path, row, col = unpack(vim.split(rule.location or "", ":"))
+    if not (path and row and col) then
+      return nil
+    end
+    if not rule.ruleClass then
+      return nil
+    end
+    if not rule.name then
+      return nil
+    end
+    return {
+      path = path,
+      row = tonumber(row) - 1,
+      column = tonumber(col) - 1,
+      kind = rule.ruleClass,
+      name = rule.name,
+    }
+  end):totable()
+end
+
+local function discover_build_target_positions(file_path, locations)
+  local positions = {
+    {
+      type = "file",
+      name = make_relative(file_path.filename, file_path:parent().filename),
+      path = file_path.filename,
+      -- neotest ranges are zero-based row, col pairs
+      range = { 0, 0, #lib.files.read_lines(file_path.filename), 0 },
+    },
+  }
+  for _, entry in ipairs(locations) do
+    -- TODO(shahms): augment these positions with tree-sitter information to use the name attribute, if present
+    -- and extend the end location to the final line of the function call. bazel query location is the open parenthesis.
+    assert(entry.path == file_path.filename)
+    table.insert(positions, {
+      type = "test",
+      name = entry.name:sub(entry.name:find(":") or 0),
+      path = file_path.filename,
+      range = { entry.row, entry.column, entry.row, entry.column },
+      bazel_targets = { entry.name, },
+    })
+    -- The enclosing file is a package; shortcut target finding.
+    -- We do this here to simplify finding the package name.
+    if not positions[1].bazel_targets then
+      positions[1].bazel_targets = { entry.name:sub(0, entry.name:find(":")) .. "all" }
+    end
+  end
+  table.sort(positions, function(a, b) return a.range[1] < b.range[1] end)
+  return lib.positions.parse_tree(positions)
 end
 
 --- Split the path into { workspace, package, target } parts.
@@ -171,6 +236,23 @@ local strategy = {
   },
 }
 
+local function find_rule_adapter(config, kind)
+  local rules = config.rules
+  if not rules then return nil end
+
+  -- If there is an exact match, use that.
+  if rules[kind] then
+    return rules[kind].adapter
+  end
+  for key, value in pairs(rules) do
+    -- TODO(shahms): Support multiple matches.
+    if kind:match(key) then
+      return value.adapter
+    end
+  end
+  return nil
+end
+
 return function(user_config)
   local config = vim.tbl_extend("force", default_config, user_config or {})
   return {
@@ -179,58 +261,36 @@ return function(user_config)
     filter_dir = strategy.single_file.filter_dir,
     is_test_file = strategy.single_file.is_test_file,
     discover_positions = function(file_path)
-      -- only called for files, not directories
-      local root, package, target = split_valid_bazel_file(file_path)
-      if not (root and package) then
+      file_path = Path:new(file_path)
+      local locations = find_file_test_locations(file_path)
+      if not locations or #locations == 0 then
         return nil
       end
-      -- TODO(shahms): use bazel.queries.tests(file(...)) to support non-BUILD files.
-      file_path = Path:new(file_path)
-      if build_files[target] then
-        local locations = bazel.run_query(
-          root,
-          bazel.compose_query("tests", "package", package),
-          { output = "location" }
-        )
-        if not locations or #locations == 0 then
-          return nil
-        end
 
-        local positions = {
-          {
-            type = "file",
-            name = make_relative(file_path.filename, file_path:parent().filename),
-            path = tostring(file_path),
-            -- neotest ranges are zero-based row, col pairs
-            range = { 0, 0, #lib.files.read_lines(file_path.filename), 0 },
-            bazel = {
-              workspace = root,
-              package = package,
-            },
-          },
-        }
-        for _, line in ipairs(locations) do
-          -- TODO(shahms): augment these positions with tree-sitter information to use the name attribute, if present
-          -- and extend the end location to the final line of the function call. bazel query location is the open parenthesis.
-          -- TODO(shahms): Use the rule kind to discover positions for the dependent files and include that information as well.
-          local loc, _, _, name = unpack(vim.split(line, " "))
-          local _, row, col = unpack(vim.split(loc, ":"))
-          -- TODO(shahms): Support non-BUILD files.
-          table.insert(positions, {
-            type = "test",
-            name = name:sub(name:find(":") or 0),
-            path = tostring(file_path),
-            range = {
-              tonumber(row) - 1,
-              tonumber(col) - 1,
-              tonumber(row) - 1,
-              tonumber(col) - 1,
-            },
-          })
+      local discovered = {}
+      for _, entry in ipairs(locations) do
+        if entry.path == file_path.filename then
+          -- The file_path provided was a BUILD file or equivalent.
+          -- The locations are within the file itself.
+          return discover_build_target_positions(file_path, locations)
+        elseif discovered[entry.kind] then
+          -- Don't rediscover file tests for the same rule kind.
+          -- TODO(shahms): add to the file's bazel_targets.
+        else
+          -- The file_path is a file with corresponding test targets.
+          -- Defer to any matching rule adapters for locations.
+          local adapter = find_rule_adapter(config, entry.kind)
+          if (adapter
+                and (not adapter.is_test_file or adapter.is_test_file(file_path.filename))
+                and adapter.discover_positions) then
+            local result = adapter.discover_positions(file_path.filename)
+            if result then
+              -- TODO(shahms): Support merging results from multiple targets/adapters
+              -- TODO(shahms): Support enclosing results in a namespace with the same name as the test target.
+              return result
+            end
+          end
         end
-        -- TODO(shahms): can we report positions for other files?
-        table.sort(positions, function(a, b) return a.range[1] < b.range[1] end)
-        return lib.positions.parse_tree(positions)
       end
       return nil
     end,
@@ -240,20 +300,20 @@ return function(user_config)
       if not (workspace and package) then
         return nil
       end
-      local query
-      if position.type == types.PositionType.file then
-        query = ("//%s:all"):format(package)
-      else
-        LOG.info("Unhandled position:", position)
-        -- TODO(shahms): handle "dir" "namespace" "test"
-        return nil
-      end
-      local targets
-      if query:match("^//") then
-        -- For simple queries, skip the query.
-        targets = { query }
-      else
-        targets = bazel.run_query(workspace, query)
+      -- If there are resolved bazel targets already in the position, use them.
+      local targets = position.bazel_targets
+      if not targets then
+        if position.type == types.PositionType.file then
+          -- TODO(shahms): handle more than just BUILD files.
+          targets = { ("//%s:all"):format(package) }
+        elseif position.type == types.PositionType.test then
+          -- TODO(shahms): handle more than just BUILD files.
+          targets = position.bazel_targets
+        else
+          LOG.info("Unhandled position:", position)
+          -- TODO(shahms): handle "dir" "namespace" "test"
+          return nil
+        end
       end
       if not targets or #targets == 0 then
         return nil
@@ -276,7 +336,7 @@ return function(user_config)
       for _, line in ipairs(lib.files.read_lines(run_spec.context.bes_path)) do
         local label, status, logs = parse_test_result(line)
         if label and status and logs then
-          -- TODO(shahms): this is only correct when tree:data().type == "file"
+          -- TODO(shahms): this is only correct for BUILD files
           results[tree:data().id .. "::" .. label:sub(label:find(":") or 0)] = {
             status = status,
             -- TODO(shahms): This is generally more readable output,
