@@ -8,12 +8,12 @@ local LOG = require("neotest.logging")
 
 
 local default_config = {
-  discovery = {
-    enabled = false,
-  },
   rules = {
-    java_test = {
-    }
+    -- <rule_pattern> = {
+    --   adapter = require("subadapter")
+    --   test_filter = function(position) end,
+    --   test_args = function(position) end,
+    -- }
   }
 }
 
@@ -115,6 +115,7 @@ local function discover_build_target_positions(file_path, locations)
       path = file_path.filename,
       -- neotest ranges are zero-based row, col pairs
       range = { 0, 0, #lib.files.read_lines(file_path.filename), 0 },
+      bazel_build_file = file_path.filename,
     },
   }
   for _, entry in ipairs(locations) do
@@ -245,7 +246,7 @@ local function find_rule_adapter(config, kind)
     return rules[kind].adapter
   end
   for key, value in pairs(rules) do
-    -- TODO(shahms): Support multiple matches.
+    -- TODO(shahms): Support multiple matches or at least log an error.
     if kind:match(key) then
       return value.adapter
     end
@@ -275,7 +276,12 @@ return function(user_config)
           return discover_build_target_positions(file_path, locations)
         elseif discovered[entry.kind] then
           -- Don't rediscover file tests for the same rule kind.
-          -- TODO(shahms): add to the file's bazel_targets.
+          local tree = discovered[entry.kind].tree
+          if tree then
+            local pos = tree:data()
+            -- Add the current target to the list of bazel targets for the file.
+            pos.bazel_targets = vim.list_extend(pos.bazel_targets or {}, { entry.name })
+          end
         else
           -- The file_path is a file with corresponding test targets.
           -- Defer to any matching rule adapters for locations.
@@ -284,38 +290,37 @@ return function(user_config)
                 and (not adapter.is_test_file or adapter.is_test_file(file_path.filename))
                 and adapter.discover_positions) then
             local result = adapter.discover_positions(file_path.filename)
+            discovered[entry.kind] = { tree = result }
             if result then
-              -- TODO(shahms): Support merging results from multiple targets/adapters
-              -- TODO(shahms): Support enclosing results in a namespace with the same name as the test target.
-              return result
+              local pos = result:data()
+              pos.bazel_targets = { entry.name }
+              pos.bazel_build_file = entry.path
             end
           end
         end
+      end
+      for _, result in pairs(discovered) do
+        -- TODO(shahms): Support merging results from multiple targets/adapters
+        return result.tree
       end
       return nil
     end,
     build_spec = function(args)
       local position = args.tree:data()
-      local workspace, package, _ = split_valid_bazel_file(position.path)
-      if not (workspace and package) then
-        return nil
-      end
-      -- If there are resolved bazel targets already in the position, use them.
-      local targets = position.bazel_targets
-      if not targets then
-        if position.type == types.PositionType.file then
-          -- TODO(shahms): handle more than just BUILD files.
-          targets = { ("//%s:all"):format(package) }
-        elseif position.type == types.PositionType.test then
-          -- TODO(shahms): handle more than just BUILD files.
-          targets = position.bazel_targets
-        else
-          LOG.info("Unhandled position:", position)
-          -- TODO(shahms): handle "dir" "namespace" "test"
-          return nil
+      local cwd = (function()
+        if position.type == types.PositionType.dir then
+          return position.path
         end
-      end
-      if not targets or #targets == 0 then
+        return Path:new(position.path):parent().filename
+      end)()
+      -- TODO(shahms): This currently only works for "file", "test", and "namespace"
+      -- which will have had positions discovered above.
+      -- Directories are more complicated and we'll need to query targets ourselves.
+      local targets = args.tree:closest_value_for("bazel_targets")
+      if targets and #targets > 0 then
+        LOG.debug("Found targets:", targets)
+      else
+        LOG.info("No bazel_targets found for:", position)
         return nil
       end
       local bes_path = nio.fn.tempname()
@@ -323,26 +328,88 @@ return function(user_config)
         command = vim.list_extend({
             "bazel",
             "test",
+            -- TODO(shahms): test_filter, test_arg
             "--build_event_json_file=" .. bes_path,
           },
           targets),
-        cwd = workspace,
+        cwd = cwd,
         context = { bes_path = bes_path },
         -- stream = function() end,
       }
     end,
     results = function(run_spec, result, tree)
+      -- We need to cover all of the following:
+      -- 1. Testing an entire BUILD file (type == "file")
+      -- 2. Test a single test from a BUILD file (type == "test")
+      -- 3. Directories (type == "dir")
+      -- 4. Testing an entire test file (type == "file")
+      -- 5. Testing all tests within a namespace (type == "namespace")
+      -- 6. Testing a single test within a test file (type == "test")
+      --
+      -- To cover 1, 2, and 4 we need to map all result targets to:
+      -- 1. "test" nodes beneath a BUILD file (w/ bazel_targets)
+      -- 2. "file" nodes with corresponding bazel_targets
+      -- To cover 5 and 6 we need to parse the xml logs.
+      -- We can't really use the sub-adapters because they often rely on context from the build_spec.
+
+      -- Contains a map from target to nodes with that target in bazel_targets.
+      -- Restricted to the same package.
+      local target_map = {}
+      -- The path of the directory containing this package's BUILD file.
+      local package_path = tree:closest_value_for("bazel_build_file")
+      -- The path of the directory containing this package's BUILD file.
+      local package_dir = Path:new(package_path):parent().filename
+      -- The node with the same path as package_root.
+      local package_node = (function()
+        for node in tree:iter_parents() do
+          -- TODO(shahms): Do I need to normalize `node:data().path`?
+          if node:data().path == package_dir then
+            return node
+          end
+        end
+      end)()
+      LOG.debug("Found package", package_node, "for", tree:data())
+      local function continue(node)
+        local pos = node:data()
+        if pos.type == types.PositionType.dir then
+          -- TODO(shahms): check if this directory is a package root for a different package.
+          return true
+        end
+        if pos.type == types.PositionType.file and pos.path == pos.bazel_build_file then
+          return true
+        end
+        return false
+      end
+      for _, node in package_node:parent():iter_nodes({ continue = continue }) do
+        -- TODO(shahms): Skip the BUILD file itself, but still include its tests.
+        local pos = node:data()
+        -- Either a child of the package file
+        if (pos.path == package_path
+              -- Or within the package defined by it.
+              or pos.bazel_build_file == package_path) and pos.bazel_targets then
+          for _, target in ipairs(pos.bazel_targets) do
+            -- Add this node to each of the targets which use it.
+            target_map[target] = vim.list_extend(target_map[target] or {}, { node })
+          end
+        end
+      end
+      LOG.debug("Found corresponding targets:", target_map)
+
       local results = {}
       for _, line in ipairs(lib.files.read_lines(run_spec.context.bes_path)) do
         local label, status, logs = parse_test_result(line)
         if label and status and logs then
-          -- TODO(shahms): this is only correct for BUILD files
-          results[tree:data().id .. "::" .. label:sub(label:find(":") or 0)] = {
-            status = status,
-            -- TODO(shahms): This is generally more readable output,
-            -- but the actual test output is logs.log.
-            output = result.output,
-          }
+          LOG.error("Found", label, status, logs, "for", tree:data().id)
+          for _, node in ipairs(target_map[label] or {}) do
+            -- TODO(shahms): This only works for BUILD tests and test files.
+            --   We need to parse the xml output for individual tests.
+            results[node:data().id] = {
+              status = status,
+              -- TODO(shahms): This is generally more readable output from
+              -- bazel, but the actual test output is logs.log.
+              output = result.output,
+            }
+          end
         end
       end
       return results
