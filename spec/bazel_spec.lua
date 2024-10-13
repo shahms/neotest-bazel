@@ -4,6 +4,9 @@ local a = require("nio").tests
 
 local root = "spec/testdata/simple_repo"
 
+-- Fetching and starting bazel can take longer than the nio default of 2000ms
+vim.env.PLENARY_TEST_TIMEOUT = 50000
+
 describe("Bazel workspace", function()
   a.it("Finds directory root", function()
     assert.are.same(bazel.root(root), Path:new(root):absolute())
@@ -24,9 +27,12 @@ describe("Bazel queries", function()
   end)
   a.it("Directory query finds targets", function()
     local query = bazel.compose_query("tests", "directory", "java")
-    assert.are.same(bazel.run_query(root, query), {
-      "//java:trivial_test",
+    local targets = bazel.run_query(root, query)
+    assert.are.not_nil(targets)
+    table.sort(targets or {})
+    assert.are.same(targets, {
       "//java:another_test",
+      "//java:trivial_test",
     })
   end)
   a.it("Find test file targets", function()
@@ -41,7 +47,10 @@ describe("Bazel queries", function()
     })
   end)
   a.it("Find BUILD file targets", function()
-    assert.are.same(bazel.find_file_test_locations(root .. "/java/BUILD"), {
+    local locations = bazel.find_file_test_locations(root .. "/java/BUILD")
+    assert.are.not_nil(locations)
+    table.sort(locations or {}, function(l, r) return l.row < r.row end)
+    assert.are.same(locations, {
       {
         name = "//java:trivial_test",
         row = 0,
