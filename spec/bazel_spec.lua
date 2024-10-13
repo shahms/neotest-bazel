@@ -24,7 +24,10 @@ describe("Bazel queries", function()
   end)
   a.it("Directory query finds targets", function()
     local query = bazel.compose_query("tests", "directory", "java")
-    assert.are.same(bazel.run_query(root, query), { "//java:trivial_test" })
+    assert.are.same(bazel.run_query(root, query), {
+      "//java:trivial_test",
+      "//java:another_test",
+    })
   end)
   a.it("Find test file targets", function()
     assert.are.same(bazel.find_file_test_locations(root .. "/java/TrivialTest.java"), {
