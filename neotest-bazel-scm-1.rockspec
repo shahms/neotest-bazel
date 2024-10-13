@@ -8,9 +8,10 @@ dependencies = {
   "neotest",
   "plenary.nvim",
   "lua==5.1",
+  "nvim-nio",
 }
 test_dependencies = {
-  "nlua"
+  "nlua",
 }
 build = {
   type = "builtin",

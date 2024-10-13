@@ -73,59 +73,25 @@ local function parse_test_result(line)
   return label, status_map[result.status] or types.ResultStatus.skipped, logs
 end
 
-local function find_file_test_locations(file_path)
-  local parent = file_path:parent().filename
-  local query = bazel.compose_query("tests", "file", make_relative(file_path.filename, parent))
-  local results = bazel.run_query(parent, query,
-    { "--output=streamed_jsonproto", "--noproto:rule_inputs_and_outputs", "--proto:output_rule_attrs=" })
-  if not results then
-    return nil
-  end
-  return vim.iter(ipairs(results)):map(function(_, line)
-    local entry = vim.json.decode(line)
-    local rule = entry and entry.type == "RULE" and entry.rule
-    if not rule then
-      return nil
-    end
-    local path, row, col = unpack(vim.split(rule.location or "", ":"))
-    if not (path and row and col) then
-      return nil
-    end
-    if not rule.ruleClass then
-      return nil
-    end
-    if not rule.name then
-      return nil
-    end
-    return {
-      path = path,
-      row = tonumber(row) - 1,
-      column = tonumber(col) - 1,
-      kind = rule.ruleClass,
-      name = rule.name,
-    }
-  end):totable()
-end
-
 local function discover_build_target_positions(file_path, locations)
   local positions = {
     {
       type = "file",
-      name = make_relative(file_path.filename, file_path:parent().filename),
-      path = file_path.filename,
+      name = vim.fs.basename(file_path),
+      path = file_path,
       -- neotest ranges are zero-based row, col pairs
-      range = { 0, 0, #lib.files.read_lines(file_path.filename), 0 },
-      bazel_build_file = file_path.filename,
+      range = { 0, 0, #lib.files.read_lines(file_path), 0 },
+      bazel_build_file = file_path,
     },
   }
   for _, entry in ipairs(locations) do
     -- TODO(shahms): augment these positions with tree-sitter information to use the name attribute, if present
     -- and extend the end location to the final line of the function call. bazel query location is the open parenthesis.
-    assert(entry.path == file_path.filename)
+    assert(entry.path == file_path)
     table.insert(positions, {
       type = "test",
       name = entry.name:sub(entry.name:find(":") or 0),
-      path = file_path.filename,
+      path = file_path,
       range = { entry.row, entry.column, entry.row, entry.column },
       bazel_targets = { entry.name, },
     })
@@ -262,15 +228,14 @@ return function(user_config)
     filter_dir = strategy.single_file.filter_dir,
     is_test_file = strategy.single_file.is_test_file,
     discover_positions = function(file_path)
-      file_path = Path:new(file_path)
-      local locations = find_file_test_locations(file_path)
+      local locations = bazel.find_file_test_locations(file_path)
       if not locations or #locations == 0 then
         return nil
       end
 
       local discovered = {}
       for _, entry in ipairs(locations) do
-        if entry.path == file_path.filename then
+        if entry.path == file_path then
           -- The file_path provided was a BUILD file or equivalent.
           -- The locations are within the file itself.
           return discover_build_target_positions(file_path, locations)
@@ -287,9 +252,9 @@ return function(user_config)
           -- Defer to any matching rule adapters for locations.
           local adapter = find_rule_adapter(config, entry.kind)
           if (adapter
-                and (not adapter.is_test_file or adapter.is_test_file(file_path.filename))
+                and (not adapter.is_test_file or adapter.is_test_file(file_path))
                 and adapter.discover_positions) then
-            local result = adapter.discover_positions(file_path.filename)
+            local result = adapter.discover_positions(file_path)
             discovered[entry.kind] = { tree = result }
             if result then
               local pos = result:data()
@@ -403,6 +368,11 @@ return function(user_config)
           for _, node in ipairs(target_map[label] or {}) do
             -- TODO(shahms): This only works for BUILD tests and test files.
             --   We need to parse the xml output for individual tests.
+            --   For a quick sampling of languages:
+            --   java_test: testsuite name is Java class name, testcase name is regular name
+            --   cc_test: testsuite name is just name, testcase includes filename
+            --   py_test: testsuite name is just name, testcase name is just name
+            --   go_test: not much relevant output
             results[node:data().id] = {
               status = status,
               -- TODO(shahms): This is generally more readable output from

@@ -164,4 +164,41 @@ function M.run_query(workspace, query, opts)
   return vim.split(stdout, "\n", { trimempty = true })
 end
 
+function M.find_file_test_locations(file_path)
+  local parent = vim.fs.dirname(file_path)
+  local query = M.compose_query("tests", "file", vim.fs.basename(file_path))
+  local results = M.run_query(parent, query, {
+    "--output=streamed_jsonproto",
+    "--noproto:rule_inputs_and_outputs",
+    "--proto:output_rule_attrs=",
+  })
+  if not results then
+    return nil
+  end
+  return vim.iter(ipairs(results)):map(function(_, line)
+    local entry = vim.json.decode(line)
+    local rule = entry and entry.type == "RULE" and entry.rule
+    if not rule then
+      return nil
+    end
+    local path, row, col = unpack(vim.split(rule.location or "", ":"))
+    if not (path and row and col) then
+      return nil
+    end
+    if not rule.ruleClass then
+      return nil
+    end
+    if not rule.name then
+      return nil
+    end
+    return {
+      path = path,
+      row = tonumber(row) - 1,
+      column = tonumber(col) - 1,
+      kind = rule.ruleClass,
+      name = rule.name,
+    }
+  end):totable()
+end
+
 return M
