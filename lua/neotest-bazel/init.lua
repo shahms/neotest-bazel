@@ -90,7 +90,7 @@ local function discover_build_target_positions(file_path, locations)
     assert(entry.path == file_path)
     table.insert(positions, {
       type = "test",
-      name = entry.name:sub(entry.name:find(":") or 0),
+      name = entry.name:sub((entry.name:find(":") or -1) + 1),
       path = file_path,
       range = { entry.row, entry.column, entry.row, entry.column },
       bazel_targets = { entry.name, },
