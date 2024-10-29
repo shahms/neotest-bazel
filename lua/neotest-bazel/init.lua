@@ -73,38 +73,6 @@ local function parse_test_result(line)
   return label, status_map[result.status] or types.ResultStatus.skipped, logs
 end
 
-local function discover_build_target_positions(file_path, locations)
-  local positions = {
-    {
-      type = "file",
-      name = vim.fs.basename(file_path),
-      path = file_path,
-      -- neotest ranges are zero-based row, col pairs
-      range = { 0, 0, #lib.files.read_lines(file_path), 0 },
-      bazel_build_file = file_path,
-    },
-  }
-  for _, entry in ipairs(locations) do
-    -- TODO(shahms): augment these positions with tree-sitter information to use the name attribute, if present
-    -- and extend the end location to the final line of the function call. bazel query location is the open parenthesis.
-    assert(entry.path == file_path)
-    table.insert(positions, {
-      type = "test",
-      name = entry.name:sub((entry.name:find(":") or -1) + 1),
-      path = file_path,
-      range = { entry.row, entry.column, entry.row, entry.column },
-      bazel_targets = { entry.name, },
-    })
-    -- The enclosing file is a package; shortcut target finding.
-    -- We do this here to simplify finding the package name.
-    if not positions[1].bazel_targets then
-      positions[1].bazel_targets = { entry.name:sub(0, entry.name:find(":")) .. "all" }
-    end
-  end
-  table.sort(positions, function(a, b) return a.range[1] < b.range[1] end)
-  return lib.positions.parse_tree(positions)
-end
-
 --- Split the path into { workspace, package, target } parts.
 local function split_target_path(path)
   local package = get_package(path)
@@ -228,7 +196,7 @@ return function(user_config)
     filter_dir = strategy.single_file.filter_dir,
     is_test_file = strategy.single_file.is_test_file,
     discover_positions = function(file_path)
-      local locations = bazel.find_file_test_locations(file_path)
+      local locations = bazel.discover_locations(file_path)
       if not locations or #locations == 0 then
         return nil
       end
@@ -238,7 +206,7 @@ return function(user_config)
         if entry.path == file_path then
           -- The file_path provided was a BUILD file or equivalent.
           -- The locations are within the file itself.
-          return discover_build_target_positions(file_path, locations)
+          return bazel.map_positions(file_path, locations)
         elseif discovered[entry.kind] then
           -- Don't rediscover file tests for the same rule kind.
           local tree = discovered[entry.kind].tree

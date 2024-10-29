@@ -36,7 +36,7 @@ describe("Bazel queries", function()
     })
   end)
   a.it("Find test file targets", function()
-    assert.are.same(bazel.find_file_test_locations(root .. "/java/TrivialTest.java"), {
+    assert.are.same(bazel.discover_locations(root .. "/java/TrivialTest.java"), {
       {
         name = "//java:trivial_test",
         row = 0,
@@ -47,7 +47,7 @@ describe("Bazel queries", function()
     })
   end)
   a.it("Find BUILD file targets", function()
-    local locations = bazel.find_file_test_locations(root .. "/java/BUILD")
+    local locations = bazel.discover_locations(root .. "/java/BUILD")
     assert.are.not_nil(locations)
     table.sort(locations or {}, function(l, r) return l.row < r.row end)
     assert.are.same(locations, {
@@ -65,6 +65,31 @@ describe("Bazel queries", function()
         path = Path:new(root, "java/BUILD"):absolute(),
         kind = "java_test",
       }
+    })
+  end)
+  a.it("Map BUILD file target positions", function()
+    local locations = bazel.discover_locations(root .. "/java/BUILD")
+    assert.are.not_nil(locations)
+    local positions = bazel.map_positions(root .. "/java/BUILD", locations):to_list()
+    assert.are.same(positions, { {
+      id = 'spec/testdata/simple_repo/java/BUILD',
+      name = 'BUILD',
+      path = 'spec/testdata/simple_repo/java/BUILD',
+      range = { 0, 0, 9, 0, },
+      type = 'file',
+    }, { {
+      id = 'spec/testdata/simple_repo/java/BUILD::trivial_test',
+      name = 'trivial_test',
+      path = 'spec/testdata/simple_repo/java/BUILD',
+      range = { 0, 0, 3, 1 },
+      type = 'test'
+    } }, { {
+      id = 'spec/testdata/simple_repo/java/BUILD::another_test',
+      name = 'another_test',
+      path = 'spec/testdata/simple_repo/java/BUILD',
+      range = { 5, 0, 8, 1 },
+      type = 'test'
+    } },
     })
   end)
 end)

@@ -1,5 +1,6 @@
 --- neotest-bazel module for constructing and executing bazel queries.
 local nio = require("nio")
+local lib = require("neotest.lib")
 local LOG = require("neotest.logging")
 
 local M = { queries = {} }
@@ -164,7 +165,8 @@ function M.run_query(workspace, query, opts)
   return vim.split(stdout, "\n", { trimempty = true })
 end
 
-function M.find_file_test_locations(file_path)
+--- @async
+function M.discover_locations(file_path)
   local parent = vim.fs.dirname(file_path)
   local query = M.compose_query("tests", "file", vim.fs.basename(file_path))
   local results = M.run_query(parent, query, {
@@ -199,6 +201,41 @@ function M.find_file_test_locations(file_path)
       name = rule.name,
     }
   end):totable()
+end
+
+--- @async
+function M.map_positions(file_path, locations)
+  local treesitter_queries = [[
+      ;; Match any function calls and the corresponding argument list.
+      ;; The location of the latter is emitted by bazel query.
+      (call arguments: (argument_list) @open ) @call
+  ]]
+  local name_map = {}
+  for _, loc in ipairs(locations) do
+    local key = tostring(loc.row) .. ":" .. tostring(loc.column)
+    name_map[key] = vim.list_extend(name_map[key] or {}, { loc.name:sub((loc.name:find(":") or -1) + 1) })
+  end
+  local function build_position(path, _, captured_nodes)
+    local row, col = captured_nodes.open:range()
+    local names = name_map[tostring(row) .. ":" .. tostring(col)]
+    if not names then
+      return nil
+    end
+
+    local result = {}
+    for i, name in ipairs(names) do
+      result[i] = {
+        type = "test",
+        path = path,
+        name = name,
+        range = { captured_nodes.call:range() },
+      }
+    end
+    return result
+  end
+  return lib.treesitter.parse_positions(file_path, treesitter_queries, {
+    build_position = build_position,
+  })
 end
 
 return M

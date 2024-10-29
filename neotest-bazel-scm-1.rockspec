@@ -9,6 +9,8 @@ dependencies = {
   "plenary.nvim",
   "lua==5.1",
   "nvim-nio",
+  "nvim-treesitter",
+  "tree-sitter-starlark",
 }
 test_dependencies = {
   "nlua",
@@ -20,4 +22,8 @@ build = {
     -- 'plugin', 'ftplugin', 'doc'
     -- here. DO NOT add 'lua' or 'lib'.
   },
+}
+test = {
+  type = "busted",
+  flags = { "--helper", "spec/minimal_init.lua" }
 }
