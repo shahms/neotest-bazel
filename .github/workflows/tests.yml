@@ -20,4 +20,4 @@ jobs:
         uses: nvim-neorocks/nvim-busted-action@v1
         with:
           nvim_version: ${{ matrix.neovim_version }}
-          before: apt install tree-sitter-cli
+          before: sudo apt install tree-sitter-cli
