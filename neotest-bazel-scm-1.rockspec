@@ -9,7 +9,6 @@ dependencies = {
   "plenary.nvim",
   "lua==5.1",
   "nvim-nio",
-  "nvim-treesitter",
   "tree-sitter-starlark",
 }
 test_dependencies = {
