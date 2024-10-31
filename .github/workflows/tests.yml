@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall tree-sitter-cli
+      - run: cargo binstall -y tree-sitter-cli
       - name: Run tests
         uses: nvim-neorocks/nvim-busted-action@v1
         with:
